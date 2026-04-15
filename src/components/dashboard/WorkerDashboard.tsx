@@ -36,7 +36,7 @@ interface Job {
   employerName: string;
   employerId: string;
   status: string;
-  createdAt: any;
+  createdAt: unknown;
 }
 
 const WorkerDashboard = () => {
@@ -108,10 +108,11 @@ const WorkerDashboard = () => {
         title: "Application sent! ✅",
         description: `You applied for "${job.title}" by ${job.employerName || "Employer"}.`,
       });
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Something went wrong";
       toast({
         title: "Failed to apply",
-        description: err.message,
+        description: message,
         variant: "destructive",
       });
     } finally {

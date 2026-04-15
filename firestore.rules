@@ -1,0 +1,56 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper functions ──────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ─── users ─────────────────────────────────────────────────────
+    // Each user can read/write only their own profile document.
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ─── jobs ──────────────────────────────────────────────────────
+    // • Any signed-in user can read jobs (workers browse open jobs).
+    // • Only the employer who owns the job can create / update / delete it.
+    match /jobs/{jobId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.employerId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+                            && resource.data.employerId == request.auth.uid;
+    }
+
+    // ─── applications ──────────────────────────────────────────────
+    // • A worker can CREATE an application (workerId must equal their uid).
+    // • A worker can READ their own applications (workerId == uid).
+    // • An employer can READ applications where employerId == their uid
+    //   (so the Employer Dashboard can query by jobId "in" their job list).
+    // • An employer can UPDATE the status field of an application on their job.
+    // • No one can delete applications.
+    match /applications/{applicationId} {
+      allow create: if isSignedIn()
+                    && request.resource.data.workerId == request.auth.uid;
+
+      allow read: if isSignedIn()
+                  && (
+                    resource.data.workerId   == request.auth.uid ||
+                    resource.data.employerId == request.auth.uid
+                  );
+
+      allow update: if isSignedIn()
+                    && resource.data.employerId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                        .hasOnly(['status']);
+
+      allow delete: if false;
+    }
+  }
+}

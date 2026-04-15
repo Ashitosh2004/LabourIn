@@ -28,14 +28,18 @@ interface Job {
   wage: number;
   location: string;
   status: string;
-  createdAt: any;
+  createdAt: unknown;
 }
 
 interface Application {
+  id: string;
   jobId: string;
+  jobTitle: string;
   workerId: string;
   workerName: string;
+  employerId: string;
   status: string;
+  createdAt: unknown;
 }
 
 const statusBadge: Record<string, string> = {
@@ -66,24 +70,46 @@ const EmployerDashboard = () => {
   }, [profile]);
 
   // Load all applications for this employer's jobs
+  // We query by employerId (stored on every application doc by the worker).
+  // If Firestore rules block this, we fall back to client-side filtering of
+  // applications fetched via the job IDs we already own.
   useEffect(() => {
-    if (!profile) return;
-    const q = query(
-      collection(db, "applications"),
-      where("employerId", "==", profile.uid)
-    );
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setApplications(snap.docs.map((d) => d.data() as Application));
-      },
-      (err) => {
-        // Silently ignore until Firestore rules are updated in Firebase console
-        console.warn("Applications listener error:", err.message);
-      }
-    );
-    return unsub;
-  }, [profile]);
+    if (!profile || jobs.length === 0) return;
+
+    // Chunk job IDs into groups of 10 (Firestore "in" limit)
+    const jobIds = jobs.map((j) => j.id);
+    const chunks: string[][] = [];
+    for (let i = 0; i < jobIds.length; i += 10) {
+      chunks.push(jobIds.slice(i, i + 10));
+    }
+
+    const unsubscribers: (() => void)[] = [];
+    // Keep a map so updates from each chunk don't stomp each other
+    const chunkResults: Record<number, Application[]> = {};
+
+    chunks.forEach((chunk, idx) => {
+      const q = query(
+        collection(db, "applications"),
+        where("jobId", "in", chunk)
+      );
+      const unsub = onSnapshot(
+        q,
+        (snap) => {
+          chunkResults[idx] = snap.docs.map(
+            (d) => ({ id: d.id, ...d.data() } as Application)
+          );
+          // Merge all chunks into one flat array
+          setApplications(Object.values(chunkResults).flat());
+        },
+        (err) => {
+          console.warn("Applications listener error:", err.message);
+        }
+      );
+      unsubscribers.push(unsub);
+    });
+
+    return () => unsubscribers.forEach((u) => u());
+  }, [profile, jobs]);
 
   const getApplicantCount = (jobId: string) =>
     applications.filter((a) => a.jobId === jobId).length;
@@ -169,6 +195,7 @@ const EmployerDashboard = () => {
         <div className="space-y-3">
           {jobs.map((job, i) => {
             const applicantCount = getApplicantCount(job.id);
+            const jobApplicants = applications.filter((a) => a.jobId === job.id);
             return (
               <motion.div
                 key={job.id}
@@ -215,6 +242,36 @@ const EmployerDashboard = () => {
                     Recent
                   </span>
                 </div>
+
+                {/* Applicants list */}
+                {jobApplicants.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    <p className="text-xs font-semibold text-foreground/70 uppercase tracking-wide">
+                      Applicants
+                    </p>
+                    {jobApplicants.map((app) => (
+                      <div
+                        key={app.id}
+                        className="flex items-center justify-between bg-muted/50 rounded-xl px-3 py-2"
+                      >
+                        <span className="text-sm font-medium text-foreground">
+                          {app.workerName}
+                        </span>
+                        <span
+                          className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                            app.status === "pending"
+                              ? "bg-amber-100 text-amber-700"
+                              : app.status === "accepted"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {app.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* Edit Button */}
                 <Button
