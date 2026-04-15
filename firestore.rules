@@ -3,23 +3,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ─── Helper functions ──────────────────────────────────────────
+    // ─── Helpers ───────────────────────────────────────────────────
     function isSignedIn() {
       return request.auth != null;
     }
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
+    function isEmployer() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "employer";
+    }
 
     // ─── users ─────────────────────────────────────────────────────
-    // Each user can read/write only their own profile document.
+    // • Any user can read their OWN profile.
+    // • Employers can read ANY user profile
+    //   (needed to show worker profiles in the applicant modal).
+    // • Only the owner can write their own profile.
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId) || isEmployer();
+      allow write: if isOwner(userId);
     }
 
     // ─── jobs ──────────────────────────────────────────────────────
     // • Any signed-in user can read jobs (workers browse open jobs).
-    // • Only the employer who owns the job can create / update / delete it.
+    // • Only the employer who created the job can create/update/delete.
     match /jobs/{jobId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
@@ -29,13 +37,13 @@ service cloud.firestore {
     }
 
     // ─── applications ──────────────────────────────────────────────
-    // • A worker can CREATE an application (workerId must equal their uid).
-    // • A worker can READ their own applications (workerId == uid).
-    // • An employer can READ applications where employerId == their uid
-    //   (so the Employer Dashboard can query by jobId "in" their job list).
-    // • An employer can UPDATE the status field of an application on their job.
-    // • No one can delete applications.
+    // • Worker creates an application (workerId must equal their uid).
+    // • Worker reads their own applications.
+    // • Employer reads applications for their jobs (employerId == uid).
+    // • Employer may update ONLY the status field (accept / reject).
+    // • Nobody can delete applications.
     match /applications/{applicationId} {
+
       allow create: if isSignedIn()
                     && request.resource.data.workerId == request.auth.uid;
 
@@ -47,8 +55,8 @@ service cloud.firestore {
 
       allow update: if isSignedIn()
                     && resource.data.employerId == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys()
-                        .hasOnly(['status']);
+                    && request.resource.data.diff(resource.data)
+                         .affectedKeys().hasOnly(['status']);
 
       allow delete: if false;
     }
