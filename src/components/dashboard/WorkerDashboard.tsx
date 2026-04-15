@@ -1,9 +1,30 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { collection, query, where, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  onSnapshot,
+  doc,
+  updateDoc,
+  addDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { motion } from "framer-motion";
-import { MapPin, Clock, IndianRupee, ToggleLeft, ToggleRight, Briefcase, Star } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  MapPin,
+  Clock,
+  IndianRupee,
+  ToggleLeft,
+  ToggleRight,
+  Briefcase,
+  Star,
+  CheckCircle,
+  Loader2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 
 interface Job {
   id: string;
@@ -13,15 +34,21 @@ interface Job {
   location: string;
   skills: string[];
   employerName: string;
+  employerId: string;
   status: string;
   createdAt: any;
 }
 
 const WorkerDashboard = () => {
   const { profile, refreshProfile } = useAuth();
+  const { toast } = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState<string | null>(null);
+  // Set of jobIds this worker has already applied to
+  const [appliedJobIds, setAppliedJobIds] = useState<Set<string>>(new Set());
 
+  // Load open jobs
   useEffect(() => {
     const q = query(collection(db, "jobs"), where("status", "==", "open"));
     const unsub = onSnapshot(q, (snap) => {
@@ -31,10 +58,65 @@ const WorkerDashboard = () => {
     return unsub;
   }, []);
 
+  // Load which jobs this worker has already applied to
+  useEffect(() => {
+    if (!profile) return;
+    const q = query(
+      collection(db, "applications"),
+      where("workerId", "==", profile.uid)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const ids = new Set(snap.docs.map((d) => d.data().jobId as string));
+        setAppliedJobIds(ids);
+      },
+      (err) => {
+        // Silently ignore permission errors until Firestore rules are updated
+        console.warn("Applications listener error:", err.message);
+      }
+    );
+    return unsub;
+  }, [profile]);
+
   const toggleAvailability = async () => {
     if (!profile) return;
-    await updateDoc(doc(db, "users", profile.uid), { available: !profile.available });
+    await updateDoc(doc(db, "users", profile.uid), {
+      available: !profile.available,
+    });
     await refreshProfile();
+  };
+
+  const handleApply = async (job: Job) => {
+    if (!profile) return;
+    if (appliedJobIds.has(job.id)) return;
+
+    setApplying(job.id);
+    try {
+      // Write to a separate 'applications' collection — workers always own these docs
+      await addDoc(collection(db, "applications"), {
+        jobId: job.id,
+        jobTitle: job.title,
+        workerId: profile.uid,
+        workerName: profile.displayName || profile.email,
+        employerId: job.employerId,
+        status: "pending",
+        createdAt: serverTimestamp(),
+      });
+
+      toast({
+        title: "Application sent! ✅",
+        description: `You applied for "${job.title}" by ${job.employerName || "Employer"}.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Failed to apply",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setApplying(null);
+    }
   };
 
   return (
@@ -64,8 +146,20 @@ const WorkerDashboard = () => {
         }`}
       >
         <div className="flex items-center gap-3">
-          <div className={`h-3 w-3 rounded-full ${profile?.available ? "bg-green-300 animate-pulse" : "bg-muted-foreground"}`} />
-          <span className={`font-semibold ${profile?.available ? "text-primary-foreground" : "text-muted-foreground"}`}>
+          <div
+            className={`h-3 w-3 rounded-full ${
+              profile?.available
+                ? "bg-green-300 animate-pulse"
+                : "bg-muted-foreground"
+            }`}
+          />
+          <span
+            className={`font-semibold ${
+              profile?.available
+                ? "text-primary-foreground"
+                : "text-muted-foreground"
+            }`}
+          >
             {profile?.available ? "You're Available for Work" : "You're Offline"}
           </span>
         </div>
@@ -74,9 +168,9 @@ const WorkerDashboard = () => {
       {/* Quick Stats */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { icon: Briefcase, label: "Jobs", value: jobs.length },
+          { icon: Briefcase, label: "Open Jobs", value: jobs.length },
+          { icon: CheckCircle, label: "Applied", value: appliedJobIds.size },
           { icon: Star, label: "Rating", value: "4.8" },
-          { icon: Clock, label: "Hours", value: "120" },
         ].map((stat) => (
           <div key={stat.label} className="glass-card rounded-2xl p-4 text-center">
             <stat.icon className="h-5 w-5 text-primary mx-auto mb-1" />
@@ -105,43 +199,85 @@ const WorkerDashboard = () => {
         </div>
       ) : (
         <div className="space-y-3">
-          {jobs.map((job, i) => (
-            <motion.div
-              key={job.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="glass-card rounded-2xl p-5"
-            >
-              <div className="flex justify-between items-start mb-2">
-                <h3 className="font-bold text-foreground">{job.title}</h3>
-                <span className="flex items-center text-primary font-bold text-sm">
-                  <IndianRupee className="h-3.5 w-3.5" />
-                  {job.wage}/hr
-                </span>
-              </div>
-              <p className="text-sm text-muted-foreground mb-3 line-clamp-2">{job.description}</p>
-              <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <MapPin className="h-3.5 w-3.5" />
-                  {job.location || "Nearby"}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Clock className="h-3.5 w-3.5" />
-                  Recent
-                </span>
-              </div>
-              {job.skills?.length > 0 && (
-                <div className="flex gap-1.5 mt-3 flex-wrap">
-                  {job.skills.map((s) => (
-                    <span key={s} className="bg-secondary/30 text-accent text-xs px-2.5 py-1 rounded-full font-medium">
-                      {s}
+          <AnimatePresence>
+            {jobs.map((job, i) => {
+              const applied = appliedJobIds.has(job.id);
+              const isApplying = applying === job.id;
+              return (
+                <motion.div
+                  key={job.id}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.05 }}
+                  className="glass-card rounded-2xl p-5"
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-bold text-foreground flex-1 mr-2">{job.title}</h3>
+                    <span className="flex items-center text-primary font-bold text-sm whitespace-nowrap">
+                      <IndianRupee className="h-3.5 w-3.5" />
+                      {job.wage}/hr
                     </span>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          ))}
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+                    {job.description}
+                  </p>
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground mb-4 flex-wrap">
+                    <span className="flex items-center gap-1">
+                      <MapPin className="h-3.5 w-3.5" />
+                      {job.location || "Nearby"}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5" />
+                      Recent
+                    </span>
+                    {job.employerName && (
+                      <span className="font-medium text-foreground/60 truncate">
+                        by {job.employerName}
+                      </span>
+                    )}
+                  </div>
+                  {job.skills?.length > 0 && (
+                    <div className="flex gap-1.5 mb-4 flex-wrap">
+                      {job.skills.map((s) => (
+                        <span
+                          key={s}
+                          className="bg-secondary/30 text-accent text-xs px-2.5 py-1 rounded-full font-medium"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Apply Button */}
+                  <Button
+                    onClick={() => handleApply(job)}
+                    disabled={applied || isApplying}
+                    className={`w-full h-10 rounded-xl font-semibold transition-all ${
+                      applied
+                        ? "bg-green-500/20 text-green-600 border border-green-500/40 cursor-default hover:bg-green-500/20"
+                        : "gradient-primary text-primary-foreground"
+                    }`}
+                    size="sm"
+                  >
+                    {isApplying ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Applying…
+                      </>
+                    ) : applied ? (
+                      <>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Applied
+                      </>
+                    ) : (
+                      "Apply Now"
+                    )}
+                  </Button>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>
