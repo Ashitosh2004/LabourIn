@@ -16,43 +16,47 @@ service cloud.firestore {
     }
 
     // ─── users ─────────────────────────────────────────────────────
-    // • Any user can read their OWN profile.
-    // • Employers can read ANY user profile
-    //   (needed to show worker profiles in the applicant modal).
-    // • Only the owner can write their own profile.
+    // • Owner can always read/write their own profile.
+    // • Employers can read ANY user profile (to view worker details in the modal).
     match /users/{userId} {
-      allow read: if isOwner(userId) || isEmployer();
+      allow read:  if isOwner(userId) || isEmployer();
       allow write: if isOwner(userId);
     }
 
     // ─── jobs ──────────────────────────────────────────────────────
     // • Any signed-in user can read jobs (workers browse open jobs).
-    // • Only the employer who created the job can create/update/delete.
+    // • Only the employer who created the job may write it.
     match /jobs/{jobId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
-                    && request.resource.data.employerId == request.auth.uid;
+      allow read:           if isSignedIn();
+      allow create:         if isSignedIn()
+                            && request.resource.data.employerId == request.auth.uid;
       allow update, delete: if isSignedIn()
                             && resource.data.employerId == request.auth.uid;
     }
 
     // ─── applications ──────────────────────────────────────────────
-    // • Worker creates an application (workerId must equal their uid).
-    // • Worker reads their own applications.
-    // • Employer reads applications for their jobs (employerId == uid).
-    // • Employer may update ONLY the status field (accept / reject).
-    // • Nobody can delete applications.
+    // Query patterns supported:
+    //   workers  → where("workerId",   "==", uid)
+    //   employers → where("employerId", "==", uid)   ← matches the allow read rule exactly
+    //
+    // Firestore validates a query by checking the rule against the query's
+    // WHERE clause. Using resource.data.employerId == request.auth.uid
+    // directly maps to where("employerId","==",uid) which is why this works.
     match /applications/{applicationId} {
 
+      // Worker creates their own application
       allow create: if isSignedIn()
-                    && request.resource.data.workerId == request.auth.uid;
+                    && request.resource.data.workerId   == request.auth.uid
+                    && request.resource.data.employerId is string;
 
+      // Worker reads their own; Employer reads any where they are the employer
       allow read: if isSignedIn()
                   && (
                     resource.data.workerId   == request.auth.uid ||
                     resource.data.employerId == request.auth.uid
                   );
 
+      // Employer may only change the `status` field (accept / reject)
       allow update: if isSignedIn()
                     && resource.data.employerId == request.auth.uid
                     && request.resource.data.diff(resource.data)

@@ -85,33 +85,25 @@ const EmployerDashboard = () => {
     return unsub;
   }, [profile]);
 
-  // ── Load applications scoped to employer's job IDs ───────────────
+  // ── Load all applications for this employer ──────────────────────
+  // Query by employerId (stored on every application by the worker).
+  // Firestore rules allow this because the rule field matches the query field.
   useEffect(() => {
-    if (!profile || jobs.length === 0) return;
+    if (!profile) return;
 
-    const jobIds = jobs.map((j) => j.id);
-    // Chunk into groups of 10 (Firestore "in" limit)
-    const chunks: string[][] = [];
-    for (let i = 0; i < jobIds.length; i += 10) chunks.push(jobIds.slice(i, i + 10));
-
-    const chunkResults: Record<number, Application[]> = {};
-    const unsubscribers: (() => void)[] = [];
-
-    chunks.forEach((chunk, idx) => {
-      const q = query(collection(db, "applications"), where("jobId", "in", chunk));
-      const unsub = onSnapshot(
-        q,
-        (snap) => {
-          chunkResults[idx] = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Application));
-          setApplications(Object.values(chunkResults).flat());
-        },
-        (err) => console.warn("Applications listener error:", err.message)
-      );
-      unsubscribers.push(unsub);
-    });
-
-    return () => unsubscribers.forEach((u) => u());
-  }, [profile, jobs]);
+    const q = query(
+      collection(db, "applications"),
+      where("employerId", "==", profile.uid)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setApplications(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Application)));
+      },
+      (err) => console.warn("Applications listener error:", err.message)
+    );
+    return unsub;
+  }, [profile]);
 
   // ── Accept / Reject ──────────────────────────────────────────────
   const updateApplicationStatus = async (status: "accepted" | "rejected") => {
